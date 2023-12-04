@@ -1,5 +1,6 @@
 ;;; 2048-game.el --- play 2048 in Emacs
 
+;;
 ;; Copyright 2014 Zachary Kanfer
 
 ;; Author: Zachary Kanfer <zkanfer@gmail.com>
@@ -62,11 +63,11 @@
 
 ;;;###autoload
 (defun 2048-game () "Start playing 2048."
-  (interactive)
-  (switch-to-buffer "2048")
-  (buffer-disable-undo "2048")
-  (2048-mode)
-  (2048-init))
+       (interactive)
+       (switch-to-buffer "2048")
+       (buffer-disable-undo "2048")
+       (2048-mode)
+       (2048-init))
 
 (require 'cl-lib)
 
@@ -112,6 +113,9 @@ Instead of accessing this directly, use 2048-get-cell.")
 (defvar *2048-history-size* 10
   "Keep this many items in the history.")
 
+(defvar *2048-history-file* nil
+  "File to save game history into.")
+
 (defvar *2048-game-has-been-added-to-history* nil
   "Whether the current game has been added to the history yet.
 
@@ -126,7 +130,8 @@ other time.")
 ;; These are prefixed with "twentyfortyeight-face-", not "2048-face"
 ;; because face names starting with numbers break htmlfontify-buffer,
 ;; as CSS classes beginning with numbers are ignored.
-(defface twentyfortyeight-face-2    '((t . (:background "khaki" :foreground "black"))) "Face for the tile 2." :group '2048-faces)
+(defface twentyfortyeight-face-2
+  '((t . (:background "khaki" :foreground "black"))) "Face for the tile 2." :group '2048-faces)
 (defface twentyfortyeight-face-4    '((t . (:background "burlywood" :foreground "black"))) "Face for the tile 4." :group '2048-faces)
 (defface twentyfortyeight-face-8    '((t . (:background "orange3" :foreground "black"))) "Face for the tile 8." :group '2048-faces)
 (defface twentyfortyeight-face-16   '((t . (:background "orange" :foreground "black"))) "Face for the tile 16." :group '2048-faces)
@@ -148,7 +153,7 @@ other time.")
 (defun 2048-get-face-symbol (number)
   "Return the face symbol for squares holding NUMBER."
   (intern (concat "twentyfortyeight-face-"
-                   (int-to-string number))))
+                  (int-to-string number))))
 
 (defun 2048-empty-tile (num)
   "Return the tile to be inserted for the blank part of a square holding NUM.
@@ -175,7 +180,7 @@ The tile is the string, but with extra font stuff on it."
 
 This macro is used to do some housekeeping around the move."
   `(progn (setq *2048-combines-this-move* (make-vector (* *2048-columns* *2048-rows*)
-                                               nil))
+                                                       nil))
 
           ,@body
           (2048-print-board)
@@ -232,11 +237,56 @@ This sets up both the tile to hold it, and the empty space around it."
   (setq *2048-victory-value* *2048-default-victory-value*)
   (setq *2048-game-has-been-added-to-history* nil)
   (setq *2048-game-epoch* (current-time))
+  (2048-load-scores)
   (2048-insert-random-cell)
   (2048-insert-random-cell)
   (2048-init-tiles)
   (2048-print-board)
   (message "Good luck!"))
+
+(defun 2048-load-scores ()
+  "Load the saved high scores from the 2048 history file."
+  (interactive)
+  (if *2048-history-file*
+      (2048-read-vars-from-file '(*2048-history*) *2048-history-file*)))
+
+(defun 2048-save-scores ()
+  "Save 2048 history variable to file."
+  (interactive)
+  (if *2048-history-file*
+      (2048-dump-vars-to-file '(*2048-history*) *2048-history-file*)))
+
+(defun 2048-read-vars-from-file (varlist filename)
+  "simple function that reads each line from FILENAME into the corresponding var from VARLIST"
+  (save-excursion
+    (let* ((buf (find-file-noselect filename))
+           (bufString (with-current-buffer buf (buffer-string))))
+      (set-buffer buf)
+      (2048-file-parse varlist bufString)
+      (kill-buffer))))
+
+(defun 2048-file-parse (varlist file-contents)
+  "parse file contents into the provided VARLIST"
+  (let ((lines (split-string file-contents "[\\n\\r]")))
+    (cl-loop for var in varlist do
+             (if lines (progn
+                         (set var (read (car lines)))
+                         (setq lines (cdr lines)))))))
+
+(defun 2048-dump-vars-to-file (varlist filename)
+  "simplistic dumping of variables in VARLIST to a file FILENAME"
+  (save-excursion
+    (let ((buf (find-file-noselect filename)))
+      (set-buffer buf)
+      (erase-buffer)
+      (2048-dump varlist buf)
+      (save-buffer)
+      (kill-buffer))))
+
+(defun 2048-dump (varlist buffer)
+  "insert into buffer the setq statement to recreate the variables in VARLIST"
+  (cl-loop for var in varlist do
+           (prin1 (symbol-value var) buffer)))
 
 (defun 2048-get-cell (row col)
   "Get the value in (ROW, COL)."
@@ -311,19 +361,15 @@ This acts by notifying the user and restarting."
 
 This item should have score SCORE, the highest tile reached as HI-TILE,
 have ended at GAME-END-TIME, and have duration GAME-DURATION"
-  (setq *2048-history*
-        (let ((history-length (length *2048-history*)))
-          ;; get the history length before calling cl-sort because cl-sort is destructive.
-          (butlast (cl-sort (cons (list *2048-score*
-                                        *2048-hi-tile*
-                                        (format-time-string "%Y-%m-%d" game-end-time)
-                                        game-duration)
-                                  *2048-history*)
-                            '>
-                            :key 'car)
-                   (max 0
-                        (- (1+ history-length)
-                           *2048-history-size*))))))
+  (setq *2048-history* (take *2048-history-size*
+                             (cl-sort (cons (list *2048-score*
+                                                  *2048-hi-tile*
+                                                  (format-time-string "%Y-%m-%d" game-end-time)
+                                                  game-duration)
+                                            *2048-history*)
+                                      '>
+                                      :key 'car)))
+  (2048-save-scores))
 
 (defun 2048-game-was-won ()
   "Return t if the game was won, nil otherwise."
@@ -407,12 +453,12 @@ have ended at GAME-END-TIME, and have duration GAME-DURATION"
                            1
                          (ceiling (log *2048-score* 10)))))
       (insert (format "%10s%s%s\n" "/" (make-string (+ 9
-                                                      score-width)
-                                                   ?\=) "\\"))
+                                                       score-width)
+                                                    ?\=) "\\"))
       (insert (format "%10s %s %d %s\n" "|" "Score:" *2048-score* "|"))
       (insert (format "%10s%s%s\n" "\\" (make-string (+ 9
-                                                       score-width)
-                                                    ?\=) "/")))
+                                                        score-width)
+                                                     ?\=) "/")))
     (insert "\n")
 
     (2048-print-help)
